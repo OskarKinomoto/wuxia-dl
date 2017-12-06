@@ -1,59 +1,71 @@
 #!/bin/env python
 
-#from __future__ import print_function
 import sys
 import requests
 import regex as re
+import subprocess
+import os
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/55.0'}
 
-#code = "mga"
-code = "ige"
-url_base = "http://www.wuxiaworld.com/" + code + "-index/" + code + "-chapter-"
+headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/57.0'}
 
-def get_url(url_base, n):
-    return url_base + str(n) + "/"
+#code = "atg"
+code = "mga"
+#code = "ige"
+url_base = "http://www.wuxiaworld.com/{}-index/{}-chapter-{}"
+
+
+def get_url(_code, n):
+    return "http://www.wuxiaworld.com/{}-index/{}-chapter-{}".format(_code, _code, n)
+
 
 out = ""
 page_brk = ""
-for i in range(0,131):
-    response = requests.get(get_url(url_base, i), headers=headers)
+
+skip = False
+first = 2275
+last = 0
+
+i = first
+while True:
+    response = requests.get(get_url(code, i), headers=headers)
 
     data = response.content.decode("utf-8")
-    
-    if code == "ige":
+
+    try:
         data = re.sub("<p>Previous Chapter <span style=\"float: right\">Next Chapter</span></p>", "", data)
         m = re.search(r"<div itemprop=\"articleBody\">(.*?)</div>", data, re.DOTALL)
         chapter_c = m.group(1)
         chapter_c = re.sub("<(/)?(a|hr)[^>]*>", '', chapter_c)
+        if '<p><img src="http://moonbunnycafe.com/wp-content/uploads/2015/08/polebunny.gif" alt="" /><br />' in chapter_c:
+            last = i - 1
+            break
         chapter = page_brk + "<h3>Chapter " + str(i) + "</h3>\n" + chapter_c
         page_brk = "<mbp:pagebreak>"
         out += chapter
         eprint(i)
-        continue
+        skip = False
+    except Exception as e:
+        if skip:
+            last = i - 2
+            break
+        skip = True
 
-    data = re.sub("<strong>Please support the translation through my <a href=\"https://www\.patreon\.com/YangWenLi\">patreon</a> if you are able to\.<br />", "", data)
-    data = re.sub("There will be early access to future chapters :\)\.</strong></p>", "", data)
-    m = re.search(r"<div itemprop=\"articleBody\">(.*)<(strong|b)>(.*)</(b|strong)>(.*)(<a [^>]*>)?Previous Chapter(</a>)?(.*)?(<a [^>]*>)?Next Chapter(</a>)?", data, re.DOTALL)
+    i += 1
 
-    title = m.group(3)
-    chapter_c = m.group(5)
-    
-    if chapter_c.startswith('</p>'):
-        chapter_c = chapter_c[4:]
-    
-    if chapter_c.endswith('<p>'):
-        chapter_c = chapter_c[:-3]
-        
-    chapter_c = re.sub("<(/)?(a|hr)[^>]*>", '', chapter_c)
-    chapter = page_brk + "<h3>" + title + "</h3>\n" + chapter_c
-    page_brk = "<mbp:pagebreak>"
-    out += chapter
-    eprint(i)
+if last < first:
+    print("No new chapters for {}! Sorry... ☹".format(code))
+else:
+    out = re.sub(r'<p>Previous Chapter <span style="float: right">Next Chapter</span></p>', '', out)
+    out = "<!DOCTYPE html><head> <meta charset=\"UTF-8\"></head><body>" + out + "</body>"
 
-outt = "<!DOCTYPE html><head> <meta charset=\"UTF-8\"></head><body>" + out + "</body>"
+    path = code.upper() + " " + str(first) + "-" + str(last) + ".html"
+    file = open(path, "wb")
+    file.write(out.encode("ascii", "xmlcharrefreplace"))
 
-sys.stdout.buffer.write(outt.encode("ascii","xmlcharrefreplace"))
+    subprocess.call(["kindlegen", path])
+
+    os.unlink(path)
