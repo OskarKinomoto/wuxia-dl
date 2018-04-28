@@ -13,20 +13,29 @@ def eprint(*args, **kwargs):
 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/57.0'}
 
 #code = "atg"
-code = "mga"
-#code = "ige"
+#code = "mga"
+code = "ige"
+#code = "wmw"
+code = "sotr"
 url_base = "http://www.wuxiaworld.com/{}-index/{}-chapter-{}"
 
+name_map = {
+        "atg" : "against-the-gods",
+        "mga" : "martial-god-asura",
+        "ige" : "imperial-god-emperor",
+        "sotr" : "sovereign-of-the-three-realms",
+    }
 
 def get_url(_code, n):
-    return "http://www.wuxiaworld.com/{}-index/{}-chapter-{}".format(_code, _code, n)
+    name = name_map[_code]
+    return "http://www.wuxiaworld.com/novel/{}/{}-chapter-{}".format(name, _code, n)
 
 
 out = ""
 page_brk = ""
 
 skip = False
-first = 2275
+first = 1
 last = 0
 
 i = first
@@ -37,7 +46,7 @@ while True:
 
     try:
         data = re.sub("<p>Previous Chapter <span style=\"float: right\">Next Chapter</span></p>", "", data)
-        m = re.search(r"<div itemprop=\"articleBody\">(.*?)</div>", data, re.DOTALL)
+        m = re.search(r"<div class=\"fr-view\">(.*?)</div>", data, re.DOTALL)
         chapter_c = m.group(1)
         chapter_c = re.sub("<(/)?(a|hr)[^>]*>", '', chapter_c)
         if '<p><img src="http://moonbunnycafe.com/wp-content/uploads/2015/08/polebunny.gif" alt="" /><br />' in chapter_c:
@@ -57,7 +66,7 @@ while True:
     i += 1
 
 if last < first:
-    print("No new chapters for {}! Sorry... ☹".format(code))
+    print("No new chapters for {}! Sorry... ☹".format(name_map[code]))
 else:
     out = re.sub(r'<p>Previous Chapter <span style="float: right">Next Chapter</span></p>', '', out)
     out = "<!DOCTYPE html><head> <meta charset=\"UTF-8\"></head><body>" + out + "</body>"
@@ -66,6 +75,6 @@ else:
     file = open(path, "wb")
     file.write(out.encode("ascii", "xmlcharrefreplace"))
 
-    subprocess.call(["kindlegen", path])
+   subprocess.call(["~/kindlegen", path])
 
-    os.unlink(path)
+   os.unlink(path)
