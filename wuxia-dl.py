@@ -7,6 +7,9 @@ import subprocess
 import os
 from os.path import expanduser
 
+from lxml import etree
+parser = etree.XMLParser(recover=True)
+
 BASE_URL = "https://www.wuxiaworld.com"
 headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/63.0'}
 
@@ -15,6 +18,9 @@ aberation = {
     "mga": "martial-god-asura",
     "ige": "imperial-god-emperor",
     "sotr": "sovereign-of-the-three-realms",
+    "tdg": "tales-of-demons-and-gods",
+    "te": "talisman-emperor",
+    "womw": "warlock-of-the-magus-world",
 }
 
 def get_chapters(long_name: str) -> [(str, str)]:
@@ -31,18 +37,24 @@ def download_html(url: str) -> str:
 
 def download_chapter(url: str) -> str:
     print(url)
-    html = download_html(url).split("\n")
-    ch = max(html, key=len)
+    html = download_html(url)
+    dom = etree.fromstring(html, parser=parser)
+    body = dom.find(".//body")
+    divs = body.findall(".//div")
+    divs = [etree.tostring(d).decode("utf-8") for d in divs if len(d.findall(".//div")) == 0]
 
-    ch = re.sub("<(/)?(a|hr)[^>]*>", '', ch)
+    ch = max(divs, key=len)
+
+    ch = re.sub("<(/)?(a|hr|div)[^>]*>", '', ch)
     ch = re.sub("Previous Chapter", '', ch)
+    ch = re.sub("Next Chapter", '', ch)
     ch = re.sub("<p>(<br>)?</p>", '', ch)
 
     return ch
 
 def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
     chapters = OrderedDict()
-    for _ in range(0, 10):
+    for _ in range(0, 5):
         chs = get_chapters(long_name)
         for ch in chs:
             m = re.search(r"chapter-([0-9]+)-?([0-9]*)", ch[0])
@@ -54,7 +66,7 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
             chapters[float(ch_num)] = ch
 
     if chapter_count == 0:
-        chapter_count = len(chapters)
+        chapter_count = len(chapters) - first_chapter
 
     chapters = OrderedDict(sorted(chapters.items()))
 
@@ -70,10 +82,12 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
         page_brk = "\n\n<mbp:pagebreak>\n\n"
         out += chapter
 
-    out = "<!DOCTYPE html>\n<head>\n\t<meta charset=\"UTF-8\">\n</head>\n\n<body>" + out + "\n\n</body>\n\n</html>"
+    out = "<!DOCTYPE html>\n<head>\n\t<meta charset=\"UTF-8\">\n</head>\n\n<body>\n\n" + out + "\n\n</body>\n\n</html>"
+    # print(out)
     path = short_name.upper() + " " + str(first_chapter) + "-" + str(first_chapter + chapter_count - 1) + ".html"
     file = open(path, "wb")
     file.write(out.encode("ascii", "xmlcharrefreplace"))
+    file.flush()
     subprocess.call([expanduser("~") + "/kindlegen", path, "-c1"])
     os.unlink(path)
 
