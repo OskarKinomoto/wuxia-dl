@@ -41,7 +41,8 @@ def download_chapter(url: str) -> str:
     dom = etree.fromstring(html, parser=parser)
     body = dom.find(".//body")
     divs = body.findall(".//div")
-    divs = [etree.tostring(d).decode("utf-8") for d in divs if len(d.findall(".//div")) == 0]
+
+    divs = [etree.tostring(d).decode("utf-8") for d in divs if d.attrib.get("class") is not None and d.attrib.get("class") == "fr-view"]
 
     ch = max(divs, key=len)
 
