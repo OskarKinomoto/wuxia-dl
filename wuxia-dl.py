@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import requests
 import regex as re
@@ -21,11 +23,19 @@ aberation = {
     "tdg": "tales-of-demons-and-gods",
     "te": "talisman-emperor",
     "womw": "warlock-of-the-magus-world",
+    "sm": "sage-monarch",
+    "hd": "heavens-devourer",
+    "dtopb": "divine-throne-of-primordial-blood",
+    "po": "physicians-odyssey",
+    "nsh": "nine-star-hegemon",
+    "ed": "emperors-domination",
+    "mw": "martial-world",
+    "og": "overgeared",
 }
 
 def get_chapters(long_name: str) -> [(str, str)]:
     novel_page = download_html("/novel/{}".format(long_name))
-    m = re.findall(r"<li class=\"chapter-item\">\n<a href=\"(.+)\">\n<span>(.+)</span>\n</a>\n</li>", novel_page)
+    m = re.findall(r"<li class=\"chapter-item\">\n<a href=\"(.+)\">\n(<span>)?(.+)(</span>)?\n</a>\n</li>", novel_page)
     return m
 
 def download_html(url: str) -> str:
@@ -36,7 +46,6 @@ def download_html(url: str) -> str:
         raise
 
 def download_chapter(url: str) -> str:
-    print(url)
     html = download_html(url)
     dom = etree.fromstring(html, parser=parser)
     body = dom.find(".//body")
@@ -55,8 +64,9 @@ def download_chapter(url: str) -> str:
 
 def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
     chapters = OrderedDict()
-    for _ in range(0, 5):
+    for _ in range(0, 20):
         chs = get_chapters(long_name)
+        print ([ch for ch in chs])
         for ch in chs:
             m = re.search(r"chapter-([0-9]+)-?([0-9]*)", ch[0])
             ch_num = m.group(1)
@@ -66,10 +76,12 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
                 pass
             chapters[float(ch_num)] = ch
 
+
     if chapter_count == 0:
         chapter_count = len(chapters) - first_chapter
 
     chapters = OrderedDict(sorted(chapters.items()))
+
 
     chapters = list(chapters.items())[first_chapter:first_chapter+chapter_count]
 
@@ -105,7 +117,11 @@ if __name__ == "__main__":
     if arg_len < 2:
         print_usage()
     short_name = sys.argv[1]
-    long_name = aberation[short_name]
+    try:
+        long_name = aberation[short_name]
+    except KeyError:
+        print(f'Aberation "{short_name}" not found :(')
+        exit(1)
 
     if arg_len < 3:
         first_chapter = 0
