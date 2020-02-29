@@ -1,49 +1,45 @@
 #!/usr/bin/env python3
 
-import sys
-import requests
-import regex as re
-from time import sleep
-from collections import OrderedDict
-import subprocess
+import json
 import os
+import subprocess
+import sys
+from collections import OrderedDict
 from os.path import expanduser
+from time import sleep
 
+import regex as re
+import requests
 from lxml import etree
+from typing import List, Tuple
+
 parser = etree.XMLParser(recover=True)
 
 BASE_URL = "https://www.wuxiaworld.com"
-headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/63.0'}
+HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/63.0"}
 
-aberation = {
-    "atg": "against-the-gods",
-    "mga": "martial-god-asura",
-    "ige": "imperial-god-emperor",
-    "sotr": "sovereign-of-the-three-realms",
-    "tdg": "tales-of-demons-and-gods",
-    "te": "talisman-emperor",
-    "womw": "warlock-of-the-magus-world",
-    "sm": "sage-monarch",
-    "hd": "heavens-devourer",
-    "dtopb": "divine-throne-of-primordial-blood",
-    "po": "physicians-odyssey",
-    "nsh": "nine-star-hegemon",
-    "ed": "emperors-domination",
-    "mw": "martial-world",
-    "og": "overgeared",
-}
+CHAPTER_BREAK = """
 
-def get_chapters(long_name: str) -> [(str, str)]:
-    novel_page = download_html("/novel/{}".format(long_name))
-    m = re.findall(r"<li class=\"chapter-item\">\n<a href=\"(.+)\">\n(<span>)?(.+)(</span>)?\n</a>\n</li>", novel_page)
-    return m
+<mbp:pagebreak>
+
+"""
+
+with open("wuxia-novels.json") as novels:
+    aberation = json.load(novels)
+
+
+def get_chapters(long_name: str) -> List[Tuple[str, str]]:
+    novel_page = download_html(f"/novel/{long_name}")
+    matches = re.findall(
+        r"<li class=\"chapter-item\">\n<a href=\"(.+)\">\n(<span>)?(.+)(</span>)?\n</a>\n</li>", novel_page
+    )
+    return [(url, title) for url, _, title, _ in matches]
+
 
 def download_html(url: str) -> str:
-    try:
-        response = requests.get(BASE_URL + url, headers=headers)
-        return response.content.decode("utf-8")
-    except:
-        raise
+    response = requests.get(BASE_URL + url, headers=HEADERS)
+    return response.content.decode("utf-8")
+
 
 def download_chapter(url: str) -> str:
     html = download_html(url)
@@ -51,24 +47,25 @@ def download_chapter(url: str) -> str:
     body = dom.find(".//body")
     divs = body.findall(".//div")
 
-    divs = [etree.tostring(d).decode("utf-8") for d in divs if d.attrib.get("class") is not None and d.attrib.get("class") == "fr-view"]
+    divs = [etree.tostring(d).decode("utf-8") for d in divs if d.attrib.get("class") == "fr-view"]
 
     ch = max(divs, key=len)
 
-    ch = re.sub("<(/)?(a|hr|div)[^>]*>", '', ch)
-    ch = re.sub("Previous Chapter", '', ch)
-    ch = re.sub("Next Chapter", '', ch)
-    ch = re.sub("<p>(<br>)?</p>", '', ch)
+    ch = re.sub("<(/)?(a|hr|div)[^>]*>", "", ch)
+    ch = re.sub("Previous Chapter", "", ch)
+    ch = re.sub("Next Chapter", "", ch)
+    ch = re.sub("<p>(<br>)?</p>", "", ch)
 
     return ch
 
-def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
+
+def load_chapters(long_name: str, first_chapter: int, chapter_count: int):
     chapters = OrderedDict()
+
     for _ in range(0, 20):
         chs = get_chapters(long_name)
-        print ([ch for ch in chs])
         for ch in chs:
-            m = re.search(r"chapter-([0-9]+)-?([0-9]*)", ch[0])
+            m = re.search(r'chapter-([0-9]+)-?([0-9]*)', ch[0])
             ch_num = m.group(1)
             try:
                 ch_num += "." + str(int(m.group(2)))
@@ -76,49 +73,62 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
                 pass
             chapters[float(ch_num)] = ch
 
-
     if chapter_count == 0:
         chapter_count = len(chapters) - first_chapter
 
     chapters = OrderedDict(sorted(chapters.items()))
 
+    return list(chapters.items())[first_chapter : first_chapter + chapter_count]
 
-    chapters = list(chapters.items())[first_chapter:first_chapter+chapter_count]
 
-    print(short_name, long_name, first_chapter, chapter_count, len(chapters))
+def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
+    chapters_refs = load_chapters(long_name, first_chapter, chapter_count)
 
-    out = ""
-    page_brk = ""
 
-    for ch in chapters:
-        chapter = page_brk + "<h3>" + ch[1][1] + "</h3>\n" + download_chapter(ch[1][0])
-        page_brk = "\n\n<mbp:pagebreak>\n\n"
-        out += chapter
 
-    out = "<!DOCTYPE html>\n<head>\n\t<meta charset=\"UTF-8\">\n</head>\n\n<body>\n\n" + out + "\n\n</body>\n\n</html>"
-    # print(out)
-    path = short_name.upper() + " " + str(first_chapter) + "-" + str(first_chapter + chapter_count - 1) + ".html"
-    file = open(path, "wb")
-    file.write(out.encode("ascii", "xmlcharrefreplace"))
-    file.flush()
+    chapters = [f'<h3>{name}</h3>\n{download_chapter(url)}' for _, (url, name) in chapters_refs]
+    out = f'''
+        <!DOCTYPE html>
+            <head>
+                <meta charset="UTF-8">
+            </head>
+
+            <body>
+                {CHAPTER_BREAK.join(chapters)}
+            </body>
+        </html>
+    '''
+
+    path = f'{short_name.upper()} {first_chapter}-{first_chapter + chapter_count - 1}.html'
+
+    with open(path, "wb") as file:
+        file.write(out.encode("ascii", "xmlcharrefreplace"))
+        file.flush()
+
     subprocess.call([expanduser("~") + "/kindlegen", path, "-c1"])
     os.unlink(path)
 
+    print(short_name, long_name, first_chapter, chapter_count, len(chapters_refs))
+
+
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
 
 def print_usage():
     eprint("Usage: ")
     eprint("    wuxia-dl <SHORT_NAME> [FIRST_CHAPTER] [CHAPTER_COUNT]")
     sys.exit(1)
 
-if __name__ == "__main__":
+
+def main():
     arg_len = len(sys.argv)
     if arg_len < 2:
         print_usage()
     short_name = sys.argv[1]
+
     try:
-        long_name = aberation[short_name]
+        long_name = aberation[short_name.lower()]
     except KeyError:
         print(f'Aberation "{short_name}" not found :(')
         exit(1)
@@ -135,3 +145,6 @@ if __name__ == "__main__":
 
     download(short_name, long_name, first_chapter, ch_count)
 
+
+if __name__ == "__main__":
+    main()
