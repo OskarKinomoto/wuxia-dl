@@ -13,16 +13,37 @@ import requests
 from lxml import etree
 from typing import List, Tuple
 
-parser = etree.XMLParser(recover=True)
+from lxml.builder import E
+from lxml.html import fragments_fromstring
+import shutil
+
+
+parser = etree.XMLParser(recover=True, encoding='utf-8')
 
 BASE_URL = "https://www.wuxiaworld.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/63.0"}
 
-CHAPTER_BREAK = """
+dc_namespace = "http://purl.org/dc/elements/1.1/"
+dc_metadata_nsmap = {"dc": dc_namespace}
+dc = "{{{0}}}".format(dc_namespace)
 
-<mbp:pagebreak>
+opf_namespace = "http://www.idpf.org/2007/opf"
 
-"""
+
+def extension_to_media_type(extension):
+    if extension == 'gif':
+        return 'image/gif'
+    elif extension == 'html':
+        return 'application/xhtml+xml'
+    elif extension == 'jpg' or extension == 'jpeg':
+        return 'image/jpeg'
+    elif extension == 'png':
+        return 'image/png'
+    elif extension == 'ncx':
+        return 'application/x-dtbncx+xml'
+    else:
+        raise Exception("Unknown extension: " + extension)
+
 
 with open("wuxia-novels.json") as novels:
     aberation = json.load(novels)
@@ -47,14 +68,13 @@ def download_chapter(url: str) -> str:
     body = dom.find(".//body")
     divs = body.findall(".//div")
 
-    divs = [etree.tostring(d).decode("utf-8") for d in divs if d.attrib.get("class") == "fr-view"]
+    fr_view_divs = [d for d in divs if d.attrib.get("class") == "fr-view"]
+
+    divs_lens = [len(etree.tostring(d)) for d in fr_view_divs]
 
     ch = max(divs, key=len)
 
-    ch = re.sub("<(/)?(a|hr|div)[^>]*>", "", ch)
-    ch = re.sub("Previous Chapter", "", ch)
-    ch = re.sub("Next Chapter", "", ch)
-    ch = re.sub("<p>(<br>)?</p>", "", ch)
+    ch = fr_view_divs[divs_lens.index(max(divs_lens))]
 
     return ch
 
@@ -62,7 +82,7 @@ def download_chapter(url: str) -> str:
 def load_chapters(long_name: str, first_chapter: int, chapter_count: int):
     chapters = OrderedDict()
 
-    for _ in range(0, 20):
+    for _ in range(0, 10):
         chs = get_chapters(long_name)
         for ch in chs:
             m = re.search(r'chapter-([0-9]+)-?([0-9]*)', ch[0])
@@ -81,34 +101,169 @@ def load_chapters(long_name: str, first_chapter: int, chapter_count: int):
     return list(chapters.items())[first_chapter : first_chapter + chapter_count]
 
 
+def create_opf(title: str, files: List[str]):
+    package = etree.Element(
+        "{{{0}}}package".format(opf_namespace),
+        nsmap={None: opf_namespace},
+        attrib={"version": "2.0", "unique-identifier": "uid"},
+    )
+
+    metadata = etree.SubElement(package, 'metadata')
+
+    dc_metadata = etree.Element("dc-metadata", nsmap=dc_metadata_nsmap)
+    metadata.append(dc_metadata)
+    etree.SubElement(dc_metadata, f"{dc}title").text = title
+    etree.SubElement(dc_metadata, f"{dc}language").text = 'en-US'
+    etree.SubElement(dc_metadata, f"{dc}creator").text = 'wuxia'
+    etree.SubElement(dc_metadata, f"{dc}publisher").text = 'wuxia'
+
+    manifest = etree.SubElement(package, "manifest")
+
+    for f in files:
+        item_id = re.sub('\..*$', '', f)
+        extension = re.sub('^.*\.', '', f)
+        etree.SubElement(
+            manifest, "item", attrib={"id": item_id, "media-type": extension_to_media_type(extension), "href": f}
+        )
+
+    spine = etree.SubElement(package, "spine", attrib={"toc": "nav-contents"})
+
+    for f in files:
+        if re.search('\.html$', f):
+            etree.SubElement(spine, "itemref", attrib={"idref": re.sub('\..*$', '', f)})
+
+    with open(f'{title}/{title}.opf', "wb") as fp:
+        opf_element_tree = etree.ElementTree(package)
+        opf_element_tree.write(fp, pretty_print=True, encoding="utf-8", xml_declaration=True)
+
+
+styles = {}
+
+
+def cssize(element: etree.Element):
+    attribs = element.attrib
+    if 'dir' in attribs:
+        del attribs['dir']
+
+    spans = element.findall(".//span")
+
+    for span in spans:
+        span_attrs = span.attrib
+        if 'style' in span_attrs:
+            if span_attrs['style'] not in styles:
+                styles[span_attrs['style']] = f'span-style-{len(styles)}'
+
+            span_attrs['class'] = styles[span_attrs['style']]
+
+            del span_attrs['style']
+
+    return element
+
+
+def create_chapter(book_title: str, title: str, content: etree.Element):
+    body = E.body()
+    etree.SubElement(body, 'h3').text = title
+    for child in content:
+        if child.tag == 'p':
+            body.append(cssize(child))
+
+    html = E.html(
+        {"xmlns": 'http://www.w3.org/1999/xhtml', "{http://www.w3.org/XML/1998/namespace}lang": 'en', "lang": 'en'},
+        E.head(
+            E.meta({'http-equiv': 'Content-Type', 'content': 'http://www.w3.org/1999/xhtml; charset=utf-8'}),
+            E.title(title),
+        ),
+        body,
+    )
+
+    chapter_path = f'{book_title}/{title}.html'
+
+    with open(chapter_path, 'wb') as file:
+        file.write(etree.tostring(html, method='html', pretty_print=True))
+
+    return f'{title}.html'
+
+
+def create_ncx(book_title: str, files: List[str]):
+    mbp_namespace = "http://mobipocket.com/ns/mbp"
+    ncx_namespace = "http://www.daisy.org/z3986/2005/ncx/"
+    ncx_nsmap = {None: ncx_namespace, "mbp": mbp_namespace}
+
+    ncx = etree.Element(
+        "ncx", nsmap=ncx_nsmap, attrib={"version": "2005-1", "{http://www.w3.org/XML/1998/namespace}lang": "en-GB"}
+    )
+
+    head = etree.SubElement(ncx, "head")
+    etree.SubElement(head, "meta", attrib={"name": "dtb:uid", "content": book_title})
+    etree.SubElement(head, "meta", attrib={"name": "dtb:depth", "content": "2"})
+    etree.SubElement(head, "meta", attrib={"name": "dtb:totalPageCount", "content": "0"})
+    etree.SubElement(head, "meta", attrib={"name": "dtb:maxPageNumber", "content": "0"})
+
+    title_text_element = etree.Element("text")
+    title_text_element.text = book_title
+    author_text_element = etree.Element("text")
+    author_text_element.text = 'wuxia'
+
+    etree.SubElement(ncx, "docTitle").append(title_text_element)
+    etree.SubElement(ncx, "docAuthor").append(author_text_element)
+
+    nav_map = etree.SubElement(ncx, "navMap")
+
+    nav_contents_files = [fn for fn in files if re.search('\.html$', fn)]
+
+    i = 1
+    for f in nav_contents_files:
+        nav_point_section = etree.SubElement(
+            nav_map, "navPoint", attrib={"class": "chapter", "id": f'chapter_{i}', "playOrder": str(i)}
+        )
+        content = etree.Element("content", attrib={"src": f})
+        title_text_element = etree.Element("text")
+        title_text_element.text = f.replace('.html', '')
+        nav_label = etree.SubElement(nav_point_section, "navLabel")
+        nav_label.append(title_text_element)
+        nav_point_section.append(content)
+        i += 1
+
+    with open(f'{book_title}/{book_title}.ncx', "wb") as fp:
+        fp.write(b"<?xml version='1.0' encoding='utf-8'?>\n")
+        fp.write(
+            b'<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">\n'
+        )
+        fp.write(etree.tostring(ncx, pretty_print=True, encoding="utf-8", xml_declaration=False))
+
+    return f'{book_title}.ncx'
+
+
 def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
     chapters_refs = load_chapters(long_name, first_chapter, chapter_count)
 
+    book_title = f'{long_name.capitalize().replace("-", " ")} {first_chapter}-{first_chapter + len(chapters_refs) - 1}'
 
+    try:
+        os.mkdir(book_title)
+    except FileExistsError:
+        pass
 
-    chapters = [f'<h3>{name}</h3>\n{download_chapter(url)}' for _, (url, name) in chapters_refs]
-    out = f'''
-        <!DOCTYPE html>
-            <head>
-                <meta charset="UTF-8">
-            </head>
+    files = []
 
-            <body>
-                {CHAPTER_BREAK.join(chapters)}
-            </body>
-        </html>
-    '''
+    for _, (url, name) in chapters_refs:
+        file_path = create_chapter(book_title, name, download_chapter(url))
+        files.append(file_path)
 
-    path = f'{short_name.upper()} {first_chapter}-{first_chapter + chapter_count - 1}.html'
+    files.append(create_ncx(book_title, files))
+    create_opf(book_title, files)
 
-    with open(path, "wb") as file:
-        file.write(out.encode("ascii", "xmlcharrefreplace"))
-        file.flush()
+    subprocess.run([expanduser("~") + "/kindlegen", f'{book_title}/{book_title}.opf', "-c1"], capture_output=True)
 
-    subprocess.call([expanduser("~") + "/kindlegen", path, "-c1"])
-    os.unlink(path)
+    try:
+        os.unlink(f'{book_title}.mobi')
+    except:
+        pass
 
-    print(short_name, long_name, first_chapter, chapter_count, len(chapters_refs))
+    shutil.move(f'{book_title}/{book_title}.mobi', '.')
+    shutil.rmtree(book_title)
+
+    print(short_name, long_name, first_chapter, first_chapter + len(chapters_refs) - 1, len(chapters_refs))
 
 
 def eprint(*args, **kwargs):
