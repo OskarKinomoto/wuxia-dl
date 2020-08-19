@@ -2,21 +2,22 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections import OrderedDict
 from os.path import expanduser
 from time import sleep
+from typing import List, Tuple
 
 import regex as re
 import requests
 from lxml import etree
-from typing import List, Tuple
-
 from lxml.builder import E
 from lxml.html import fragments_fromstring
-import shutil
 
+from config import get_fullname, get_last_chapter, set_last_chapter
+from utils import eprint, extension_to_media_type
 
 parser = etree.XMLParser(recover=True, encoding='utf-8')
 
@@ -28,25 +29,6 @@ dc_metadata_nsmap = {"dc": dc_namespace}
 dc = "{{{0}}}".format(dc_namespace)
 
 opf_namespace = "http://www.idpf.org/2007/opf"
-
-
-def extension_to_media_type(extension):
-    if extension == 'gif':
-        return 'image/gif'
-    elif extension == 'html':
-        return 'application/xhtml+xml'
-    elif extension == 'jpg' or extension == 'jpeg':
-        return 'image/jpeg'
-    elif extension == 'png':
-        return 'image/png'
-    elif extension == 'ncx':
-        return 'application/x-dtbncx+xml'
-    else:
-        raise Exception("Unknown extension: " + extension)
-
-
-with open("wuxia-novels.json") as novels:
-    aberation = json.load(novels)
 
 
 def get_chapters(long_name: str) -> List[Tuple[str, str]]:
@@ -79,7 +61,7 @@ def download_chapter(url: str) -> str:
     return ch
 
 
-def load_chapters(long_name: str, first_chapter: int, chapter_count: int):
+def load_chapters(long_name: str, first_chapter: int):
     chapters = OrderedDict()
 
     for _ in range(0, 10):
@@ -93,12 +75,9 @@ def load_chapters(long_name: str, first_chapter: int, chapter_count: int):
                 pass
             chapters[float(ch_num)] = ch
 
-    if chapter_count == 0:
-        chapter_count = len(chapters) - first_chapter
-
     chapters = OrderedDict(sorted(chapters.items()))
 
-    return list(chapters.items())[first_chapter : first_chapter + chapter_count]
+    return list(chapters.items())[first_chapter:]
 
 
 def create_opf(title: str, files: List[str]):
@@ -119,22 +98,34 @@ def create_opf(title: str, files: List[str]):
 
     manifest = etree.SubElement(package, "manifest")
 
-    for f in files:
+    for i, f in enumerate(files):
         item_id = re.sub('\..*$', '', f)
         extension = re.sub('^.*\.', '', f)
         etree.SubElement(
-            manifest, "item", attrib={"id": item_id, "media-type": extension_to_media_type(extension), "href": f}
+            manifest,
+            "item",
+            attrib={"id": f'{item_id}_{i}', "media-type": extension_to_media_type(extension), "href": f},
         )
 
     spine = etree.SubElement(package, "spine", attrib={"toc": "nav-contents"})
 
-    for f in files:
+    for i, f in enumerate(files):
         if re.search('\.html$', f):
-            etree.SubElement(spine, "itemref", attrib={"idref": re.sub('\..*$', '', f)})
+            item_id = re.sub('\..*$', '', f)
+            etree.SubElement(spine, "itemref", attrib={"idref": f'{item_id}_{i}'})
 
     with open(f'{title}/{title}.opf', "wb") as fp:
         opf_element_tree = etree.ElementTree(package)
         opf_element_tree.write(fp, pretty_print=True, encoding="utf-8", xml_declaration=True)
+        fp.flush()
+
+    with open(f'{title}/{title}.opf', 'r') as fp:
+        data = fp.read()
+
+    data = data.replace('&amp;', '&')
+
+    with open(f'{title}/{title}.opf', "w") as fp:
+        fp.write(data)
 
 
 styles = {}
@@ -161,6 +152,7 @@ def cssize(element: etree.Element):
 
 
 def create_chapter(book_title: str, title: str, content: etree.Element):
+    print(title)
     body = E.body()
     etree.SubElement(body, 'h3').text = title
     for child in content:
@@ -234,10 +226,14 @@ def create_ncx(book_title: str, files: List[str]):
     return f'{book_title}.ncx'
 
 
-def download(short_name: str, long_name: str, first_chapter: int, chapter_count: int = 0):
-    chapters_refs = load_chapters(long_name, first_chapter, chapter_count)
+def download(short_name: str, long_name: str, first_chapter: int):
+    print(short_name, long_name, first_chapter)
 
-    book_title = f'{long_name.capitalize().replace("-", " ")} {first_chapter}-{first_chapter + len(chapters_refs) - 1}'
+    chapters_refs = load_chapters(long_name, first_chapter)
+
+    last_chapter = first_chapter + len(chapters_refs) - 1
+
+    book_title = f'{long_name.capitalize().replace("-", " ")} {first_chapter}-{last_chapter}'
 
     try:
         os.mkdir(book_title)
@@ -253,7 +249,7 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
     files.append(create_ncx(book_title, files))
     create_opf(book_title, files)
 
-    subprocess.run([expanduser("~") + "/kindlegen", f'{book_title}/{book_title}.opf', "-c1"], capture_output=True)
+    subprocess.run([expanduser("~") + "/kindlegen", f'{book_title}/{book_title}.opf', "-c1"], capture_output=False)
 
     try:
         os.unlink(f'{book_title}.mobi')
@@ -263,42 +259,30 @@ def download(short_name: str, long_name: str, first_chapter: int, chapter_count:
     shutil.move(f'{book_title}/{book_title}.mobi', '.')
     shutil.rmtree(book_title)
 
-    print(short_name, long_name, first_chapter, first_chapter + len(chapters_refs) - 1, len(chapters_refs))
-
-
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
+    set_last_chapter(short_name, last_chapter)
+    print(short_name, long_name, first_chapter, last_chapter, len(chapters_refs))
 
 
 def print_usage():
     eprint("Usage: ")
-    eprint("    wuxia-dl <SHORT_NAME> [FIRST_CHAPTER] [CHAPTER_COUNT]")
-    sys.exit(1)
+    eprint("    wuxia-dl <SHORT_NAME> [FIRST_CHAPTER]")
+    exit(1)
 
 
 def main():
     arg_len = len(sys.argv)
     if arg_len < 2:
         print_usage()
-    short_name = sys.argv[1]
 
-    try:
-        long_name = aberation[short_name.lower()]
-    except KeyError:
-        print(f'Aberation "{short_name}" not found :(')
-        exit(1)
+    short_name = sys.argv[1]
+    full_name = get_fullname(short_name)
 
     if arg_len < 3:
-        first_chapter = 0
+        first_chapter = get_last_chapter(short_name) + 1
     else:
         first_chapter = int(sys.argv[2])
 
-    if arg_len < 4:
-        ch_count = 0
-    else:
-        ch_count = int(sys.argv[3])
-
-    download(short_name, long_name, first_chapter, ch_count)
+    download(short_name, full_name, first_chapter)
 
 
 if __name__ == "__main__":

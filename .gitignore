@@ -1,3 +1,5 @@
 *.mobi
 *.html
 .vscode
+__pycache__
+.mypy_cache
