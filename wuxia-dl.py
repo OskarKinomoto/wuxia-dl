@@ -16,7 +16,7 @@ from lxml import etree
 from lxml.builder import E
 from lxml.html import fragments_fromstring
 
-from config import get_fullname, get_last_chapter, set_last_chapter
+from config import get_fullname, get_last_chapter, set_last_chapter, get_all_last_shortnames
 from utils import eprint, extension_to_media_type
 
 parser = etree.XMLParser(recover=True, encoding='utf-8')
@@ -269,10 +269,20 @@ def print_usage():
     exit(1)
 
 
+def download_all_from_last():
+    shornames = get_all_last_shortnames()
+
+    for short_name in shornames:
+        full_name = get_fullname(short_name)
+        first_chapter = get_last_chapter(short_name) + 1
+        download(short_name, full_name, first_chapter)
+
+
 def main():
     arg_len = len(sys.argv)
     if arg_len < 2:
-        print_usage()
+        download_all_from_last()
+        exit(0)
 
     short_name = sys.argv[1]
     full_name = get_fullname(short_name)

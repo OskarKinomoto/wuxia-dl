@@ -38,3 +38,11 @@ def set_last_chapter(shortname: str, chapter: int):
 
     with open(chapters_file, 'w') as file:
         json.dump(data, file)
+
+def get_all_last_shortnames():
+    try:
+        with open(chapters_file, 'r') as file:
+            data = json.load(file)
+            return list(data.keys())
+    except Exception:
+        return []
