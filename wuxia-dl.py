@@ -16,8 +16,12 @@ from lxml import etree
 from lxml.builder import E
 from lxml.html import fragments_fromstring
 
-from config import get_fullname, get_last_chapter, set_last_chapter, get_all_last_shortnames
+from config import get_fullname, get_last_chapter, set_last_chapter, get_all_last_shortnames, get_code
 from utils import eprint, extension_to_media_type
+from bs4 import BeautifulSoup, element
+
+from novelupdates import NuApi
+
 
 parser = etree.XMLParser(recover=True, encoding='utf-8')
 
@@ -31,53 +35,52 @@ dc = "{{{0}}}".format(dc_namespace)
 opf_namespace = "http://www.idpf.org/2007/opf"
 
 
+def remove_attrs_from_children(bs):
+    for tag in bs.find_all('a'):
+        if 'chapter' in tag.get_text().lower():
+            tag.extract()
+
 def get_chapters(long_name: str) -> List[Tuple[str, str]]:
-    novel_page = download_html(f"/novel/{long_name}")
+    novel_page = download_html(f"/novel/{long_name}")[0]
     matches = re.findall(
         r"<li class=\"chapter-item\">\n<a href=\"(.+)\">\n(<span>)?(.+)(</span>)?\n</a>\n</li>", novel_page
     )
     return [(url, title) for url, _, title, _ in matches]
 
 
-def download_html(url: str) -> str:
-    response = requests.get(BASE_URL + url, headers=HEADERS)
-    return response.content.decode("utf-8")
+def download_html(url: str, base = BASE_URL) -> str:
+    response = requests.get(base + url, headers=HEADERS)
+    return response.content.decode("utf-8"), response.url
 
 
 def download_chapter(url: str) -> str:
-    html = download_html(url)
-    dom = etree.fromstring(html, parser=parser)
-    body = dom.find(".//body")
-    divs = body.findall(".//div")
+    try:
+        content, redirected_url = download_html('https:' + url, '')
+        page = BeautifulSoup(content, 'html.parser')
 
-    fr_view_divs = [d for d in divs if d.attrib.get("class") == "fr-view"]
+        if 'wuxiaworld.com' not in redirected_url:
+            return None
 
-    divs_lens = [len(etree.tostring(d)) for d in fr_view_divs]
+        try:
+            title = page.find('title').get_text().split('-')[1].strip()
+        except:
+            title = page.find('title').get_text().strip()
 
-    ch = max(divs, key=len)
+        cs = page.find(class_='fr-view')
+        [x.extract() for x in cs.findAll('script')]
+        remove_attrs_from_children(cs)
+        content = cs.decode_contents()
+        return title, etree.fromstring('<div>' + content + '</div>', parser=parser)
+    except:
+        raise Exception(f'Problem with chapter - {url} - {redirected_url}')
 
-    ch = fr_view_divs[divs_lens.index(max(divs_lens))]
 
-    return ch
-
-
-def load_chapters(long_name: str, first_chapter: int):
-    chapters = OrderedDict()
-
-    for _ in range(0, 10):
-        chs = get_chapters(long_name)
-        for ch in chs:
-            m = re.search(r'chapter-([0-9]+)-?([0-9]*)', ch[0])
-            ch_num = m.group(1)
-            try:
-                ch_num += "." + str(int(m.group(2)))
-            except:
-                pass
-            chapters[float(ch_num)] = ch
-
-    chapters = OrderedDict(sorted(chapters.items()))
-
-    return list(chapters.items())[first_chapter:]
+def load_chapters(code: str, first_chapter: int):
+    soup = NuApi._chapters(code)
+    links = soup.find_all('a')
+    links = [link['href'] for link in links if link.get_text()]
+    links.reverse()
+    return links[first_chapter:]
 
 
 def create_opf(title: str, files: List[str]):
@@ -151,11 +154,14 @@ def cssize(element: etree.Element):
     return element
 
 
-def create_chapter(book_title: str, title: str, content: etree.Element):
-    print(title)
+def create_chapter(book_title: str, payload: Tuple[str, etree.Element]):
+    title = payload[0]
+
     body = E.body()
+
     etree.SubElement(body, 'h3').text = title
-    for child in content:
+
+    for child in payload[1]:
         if child.tag == 'p':
             body.append(cssize(child))
 
@@ -167,6 +173,8 @@ def create_chapter(book_title: str, title: str, content: etree.Element):
         ),
         body,
     )
+
+    print(title, '-------', len(body))
 
     chapter_path = f'{book_title}/{title}.html'
 
@@ -226,10 +234,10 @@ def create_ncx(book_title: str, files: List[str]):
     return f'{book_title}.ncx'
 
 
-def download(short_name: str, long_name: str, first_chapter: int):
+def download(short_name: str, long_name: str, code: str, first_chapter: int):
     print(short_name, long_name, first_chapter)
 
-    chapters_refs = load_chapters(long_name, first_chapter)
+    chapters_refs = load_chapters(code, first_chapter)
 
     last_chapter = first_chapter + len(chapters_refs) - 1
 
@@ -242,14 +250,18 @@ def download(short_name: str, long_name: str, first_chapter: int):
 
     files = []
 
-    for _, (url, name) in chapters_refs:
-        file_path = create_chapter(book_title, name, download_chapter(url))
-        files.append(file_path)
+    for url in chapters_refs:
+        chapter = download_chapter(url)
+        if chapter is None:
+            eprint('Chapter is not hosted on supported website :/ Skipping')
+        else:
+            file_path = create_chapter(book_title, chapter)
+            files.append(file_path)
 
     files.append(create_ncx(book_title, files))
     create_opf(book_title, files)
 
-    subprocess.run([expanduser("~") + "/kindlegen", f'{book_title}/{book_title}.opf', "-c1"], capture_output=False)
+    subprocess.run([expanduser("~") + "/kindlegen", f'{book_title}/{book_title}.opf', "-c1"], capture_output=True)
 
     try:
         os.unlink(f'{book_title}.mobi')
@@ -275,7 +287,8 @@ def download_all_from_last():
     for short_name in shornames:
         full_name = get_fullname(short_name)
         first_chapter = get_last_chapter(short_name) + 1
-        download(short_name, full_name, first_chapter)
+        code = get_code(short_name)
+        download(short_name, full_name, code, first_chapter)
 
 
 def main():
@@ -286,13 +299,14 @@ def main():
 
     short_name = sys.argv[1]
     full_name = get_fullname(short_name)
+    code = get_code(short_name)
 
     if arg_len < 3:
         first_chapter = get_last_chapter(short_name) + 1
     else:
         first_chapter = int(sys.argv[2])
 
-    download(short_name, full_name, first_chapter)
+    download(short_name, full_name, code, first_chapter)
 
 
 if __name__ == "__main__":

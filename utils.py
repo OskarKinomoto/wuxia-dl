@@ -1,3 +1,5 @@
+import sys
+
 def extension_to_media_type(extension):
     if extension == 'gif':
         return 'image/gif'
