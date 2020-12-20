@@ -1,6 +1,7 @@
+import regex as re
 import requests
 from bs4 import BeautifulSoup, element
-import regex as re
+
 
 class NuApi:
     @staticmethod

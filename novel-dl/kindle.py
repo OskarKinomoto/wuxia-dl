@@ -1,13 +1,14 @@
 import os
-from lxml import etree
-import regex as re
-from utils import extension_to_media_type
-from lxml.builder import E
 import shutil
 import subprocess
 from os.path import expanduser
-
 from typing import Tuple
+
+import regex as re
+from lxml import etree
+from lxml.builder import E
+
+from .utils import extension_to_media_type
 
 opf_namespace = "http://www.idpf.org/2007/opf"
 
@@ -166,8 +167,8 @@ class KindleBook:
         metadata.append(dc_metadata)
         etree.SubElement(dc_metadata, f"{dc}title").text = self.book_title
         etree.SubElement(dc_metadata, f"{dc}language").text = "en-US"
-        etree.SubElement(dc_metadata, f"{dc}creator").text = "wuxia"
-        etree.SubElement(dc_metadata, f"{dc}publisher").text = "wuxia"
+        etree.SubElement(dc_metadata, f"{dc}creator").text = self.author
+        etree.SubElement(dc_metadata, f"{dc}publisher").text = self.author
 
         manifest = etree.SubElement(package, "manifest")
 

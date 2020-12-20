@@ -1,6 +1,7 @@
 import json
 import sys
-from utils import eprint
+
+from .utils import eprint
 
 aberations_file = "wuxia-novels.json"
 chapters_file = "wuxia-last-chapter.json"

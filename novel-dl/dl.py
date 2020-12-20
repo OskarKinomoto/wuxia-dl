@@ -1,24 +1,21 @@
-#!/usr/bin/env python3
-
 import sys
 from typing import List, Tuple
 
 import regex as re
 import requests
+from bs4 import BeautifulSoup
 from lxml import etree
 
-from config import (
+from .config import (
+    get_all_last_shortnames,
+    get_code,
     get_fullname,
     get_last_chapter,
     set_last_chapter,
-    get_all_last_shortnames,
-    get_code,
 )
-from utils import eprint
-from bs4 import BeautifulSoup
-
-from novelupdates import NuApi
-from kindle import KindleBook
+from .kindle import KindleBook
+from .novelupdates import NuApi
+from .utils import eprint
 
 parser = etree.XMLParser(recover=True, encoding="utf-8")
 
