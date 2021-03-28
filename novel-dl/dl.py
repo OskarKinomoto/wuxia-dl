@@ -58,7 +58,7 @@ def download_chapter(url: str) -> str:
         except Exception:
             title = page.find("title").get_text().strip()
 
-        cs = page.find(class_="fr-view")
+        cs = page.find(id="chapter-content")
         [x.extract() for x in cs.findAll("script")]
         remove_attrs_from_children(cs)
         content = cs.decode_contents()
